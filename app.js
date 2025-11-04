@@ -3,6 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const dotenv = require("dotenv");
 const cookieParser = require("cookie-parser");
+const authRouter = require("./src/router/auth");
 
 dotenv.config();
 
@@ -22,8 +23,6 @@ app.use(express.json()); //parse incoming JSON bodies
 app.use(express.urlencoded({ extended: true })); //parse URL encoded request bodies with nesting enabled
 app.use(cookieParser()); // parse cookies from incoming HTTP req
 
-app.use('/', (req, res)=>{
-  console.log("root route ....")
-})
+app.use("/auth", authRouter);  //auth endpoints
 
 module.exports = app;
