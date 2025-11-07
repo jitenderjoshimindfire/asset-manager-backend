@@ -4,8 +4,11 @@ const helmet = require("helmet");
 const dotenv = require("dotenv");
 const cookieParser = require("cookie-parser");
 const authRouter = require("./src/router/auth");
+const { ensureBucketExists } = require('./src/config/aws/minio');
+
 
 dotenv.config();
+ensureBucketExists().catch(console.error);
 
 const app = express();
 
