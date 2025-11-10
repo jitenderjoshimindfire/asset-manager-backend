@@ -1,28 +1,71 @@
 const jwt = require("jsonwebtoken");
+const User = require("../model/userModel"); // Add this import
 
-const refreshController = (req, res) => {
-  const refreshToken = req.cookies.jwt;
-  if (!refreshToken) return res.sendStatus(401);
+const refreshController = async (req, res) => {
+  try {
+    const refreshToken = req.cookies.jwt;
 
-  jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
-    if (err) return res.sendStatus(403);
+    if (!refreshToken) {
+      return res.status(401).json({
+        status: "error",
+        message: "Refresh token required",
+      });
+    }
 
-    accessToken = jwt.sign(
-      {
-        id: decoded.id,
-        email: decoded.email,
-        roles: decoded.roles,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "1h" }
+    jwt.verify(
+      refreshToken,
+      process.env.REFRESH_TOKEN_SECRET,
+      async (err, decoded) => {
+        if (err) {
+          return res.status(403).json({
+            status: "error",
+            message: "Invalid refresh token",
+          });
+        }
+
+        // Verify user still exists
+        const user = await User.findById(decoded.id);
+        if (!user) {
+          return res.status(403).json({
+            status: "error",
+            message: "User no longer exists",
+          });
+        }
+
+        // Generate new access token
+        const accessToken = jwt.sign(
+          {
+            id: user._id,
+            email: user.email,
+            roles: user.roles,
+            name: user.name,
+          },
+          process.env.JWT_SECRET,
+          { expiresIn: "1h" }
+        );
+
+        res.status(200).json({
+          status: "success",
+          message: "Access token refreshed successfully",
+          accessToken: accessToken,
+          user: {
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            roles: user.roles,
+            storageUsed: user.storageUsed,
+            assetsCount: user.assetsCount,
+          },
+        });
+      }
     );
-
-    res.status(201).json({
-      status: "success",
-      message: "access token refreshed successfully",
-      accessToken: accessToken,
+  } catch (err) {
+    console.error("Refresh token error:", err);
+    res.status(500).json({
+      status: "error",
+      message: "Token refresh failed",
     });
-  });
+  }
 };
 
 module.exports = refreshController;
