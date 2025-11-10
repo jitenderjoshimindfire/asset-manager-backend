@@ -413,21 +413,30 @@ exports.deleteAsset = async (req, res) => {
 // Get dashboard stats
 exports.getDashboardStats = async (req, res) => {
   try {
-    const totalAssets = await Asset.countDocuments({
-      uploadedBy: req.user._id,
-    });
-    const totalSize = await Asset.aggregate([
-      { $match: { uploadedBy: req.user._id } },
+    const userId = req.user._id;
+
+    // Get total assets count
+    const totalAssets = await Asset.countDocuments({ uploadedBy: userId });
+
+    // Get total storage used
+    const totalSizeResult = await Asset.aggregate([
+      { $match: { uploadedBy: userId } },
       { $group: { _id: null, totalSize: { $sum: "$size" } } },
     ]);
+    const totalSize =
+      totalSizeResult.length > 0 ? totalSizeResult[0].totalSize : 0;
 
-    const recentAssets = await Asset.find({ uploadedBy: req.user._id })
+      console.log(totalSize, "total size of assets")
+
+    // Get recent assets
+    const recentAssets = await Asset.find({ uploadedBy: userId })
       .sort({ createdAt: -1 })
       .limit(5)
-      .select("originalName mimeType size createdAt");
+      .select("originalName mimeType size createdAt processingStatus");
 
+    // Get assets by type with individual counts
     const assetsByType = await Asset.aggregate([
-      { $match: { uploadedBy: req.user._id } },
+      { $match: { uploadedBy: userId } },
       {
         $group: {
           _id: {
@@ -448,12 +457,23 @@ exports.getDashboardStats = async (req, res) => {
       },
     ]);
 
+    // Convert assetsByType array to individual counts for frontend
+    const typeCounts = {
+      totalImages:
+        assetsByType.find((item) => item._id === "image")?.count || 0,
+      totalVideos:
+        assetsByType.find((item) => item._id === "video")?.count || 0,
+      totalDocuments:
+        assetsByType.find((item) => item._id === "document")?.count || 0,
+    };
+
     res.status(200).json({
       success: true,
       data: {
         totalAssets,
-        totalSize: totalAssets > 0 ? totalSize[0].totalSize : 0,
+        totalSize,
         recentAssets,
+        ...typeCounts, 
         assetsByType,
       },
     });
