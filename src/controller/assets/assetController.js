@@ -1,89 +1,108 @@
-const Asset = require('../model/assetModel');
-const User = require('../model/userModel');
-const { minioClient } = require('../../config/aws/minio');
-const { assetQueue } = require('../workers/assetProcessor');
-const crypto = require('crypto');
+const Asset = require("../../model/assetModel");
+const User = require("../../model/userModel");
+const { minioClient } = require("../../config/aws/minio");
+const { assetQueue } = require("../../workers/assetProcessor");
+const crypto = require("crypto");
 
 // Generate unique file key
 const generateFileKey = (originalName) => {
   const timestamp = Date.now();
-  const randomString = crypto.randomBytes(8).toString('hex');
-  const extension = originalName.split('.').pop();
+  const randomString = crypto.randomBytes(8).toString("hex");
+  const extension = originalName.split(".").pop();
   return `${timestamp}-${randomString}.${extension}`;
 };
 
 // Upload asset
+// In your asset controller - update the uploadAsset function
 exports.uploadAsset = async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No files uploaded'
+        message: "No files uploaded",
       });
     }
 
     const uploadResults = [];
 
     for (const file of req.files) {
-      const fileKey = generateFileKey(file.originalname);
-      
-      // Upload to MinIO
-      await minioClient.putObject(
-        process.env.MINIO_BUCKET,
-        fileKey,
-        file.buffer,
-        file.size,
-        { 'Content-Type': file.mimetype }
-      );
+      try {
+        const fileKey = generateFileKey(file.originalname);
 
-      // Create asset record
-      const asset = await Asset.create({
-        filename: fileKey,
-        originalName: file.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
-        storageKey: fileKey,
-        uploadedBy: req.user._id,
-        tags: extractTagsFromFilename(file.originalname),
-      });
+        // Upload to MinIO
+        await minioClient.putObject(
+          process.env.MINIO_BUCKET,
+          fileKey,
+          file.buffer,
+          file.size,
+          { "Content-Type": file.mimetype }
+        );
 
-      // Add to processing queue
-      await assetQueue.add('process-asset', {
-        assetId: asset._id,
-        fileKey: fileKey,
-        mimeType: file.mimetype,
-      });
+        // Create asset record - FIX: Use uploadedBy instead of uploader
+        const asset = await Asset.create({
+          filename: fileKey,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          storageKey: fileKey,
+          uploadedBy: req.user._id, // Make sure this matches your user ID field
+          tags: extractTagsFromFilename(file.originalname),
+          processingStatus: "pending", // Add this field
+        });
 
-      uploadResults.push({
-        id: asset._id,
-        originalName: asset.originalName,
-        filename: asset.filename,
-        size: asset.size,
-        mimeType: asset.mimeType,
-        status: 'uploaded'
-      });
+        console.log("Asset created:", asset._id);
+
+        // Add to processing queue
+        await assetQueue.add("process-asset", {
+          assetId: asset._id,
+          fileKey: fileKey,
+          mimeType: file.mimetype,
+        });
+
+        uploadResults.push({
+          id: asset._id,
+          name: asset.originalName, // Change from originalName to name for frontend
+          originalName: asset.originalName,
+          filename: asset.filename,
+          size: asset.size,
+          type: getAssetType(asset.mimeType), // Add type field for frontend
+          mimeType: asset.mimeType,
+          processingStatus: "pending", // Add status for frontend
+          uploadDate: asset.createdAt, // Add upload date for frontend
+        });
+
+        console.log("File processed successfully:", file.originalname);
+      } catch (fileError) {
+        console.error(`Error processing file ${file.originalname}:`, fileError);
+      }
     }
 
     res.status(200).json({
       success: true,
-      message: 'Files uploaded successfully',
-      data: uploadResults
+      message: `Successfully uploaded ${uploadResults.length} files`,
+      assets: uploadResults, // Change from 'data' to 'assets' to match frontend expectation
     });
-
   } catch (error) {
-    console.error('Upload error:', error);
+    console.error("Upload error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error uploading files'
+      message: "Error uploading files",
     });
   }
 };
 
+// Add this helper function to your controller
+const getAssetType = (mimeType) => {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  return "document";
+};
+
 // Extract tags from filename
 const extractTagsFromFilename = (filename) => {
-  const nameWithoutExt = filename.split('.').slice(0, -1).join('.');
+  const nameWithoutExt = filename.split(".").slice(0, -1).join(".");
   const tags = nameWithoutExt.toLowerCase().split(/[\s_-]+/);
-  return tags.filter(tag => tag.length > 2);
+  return tags.filter((tag) => tag.length > 2);
 };
 
 // Get all assets with pagination and filtering
@@ -92,18 +111,24 @@ exports.getAssets = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 12;
     const skip = (page - 1) * limit;
-    const search = req.query.search || '';
-    const category = req.query.category || '';
-    const type = req.query.type || '';
+    const search = req.query.search || "";
+    const category = req.query.category || "";
+    const type = req.query.type || "";
+    const tags = req.query.tags || ""; // Add tags support
 
     let query = { uploadedBy: req.user._id };
 
     // Search filter
     if (search) {
       query.$or = [
-        { originalName: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } }
+        { originalName: { $regex: search, $options: "i" } },
+        { tags: { $in: [new RegExp(search, "i")] } },
       ];
+    }
+
+    // Tags filter (specific tag search)
+    if (tags) {
+      query.tags = { $in: [new RegExp(tags, "i")] };
     }
 
     // Category filter
@@ -113,11 +138,11 @@ exports.getAssets = async (req, res) => {
 
     // Type filter
     if (type) {
-      if (type === 'image') {
+      if (type === "image") {
         query.mimeType = { $regex: /^image\// };
-      } else if (type === 'video') {
+      } else if (type === "video") {
         query.mimeType = { $regex: /^video\// };
-      } else if (type === 'document') {
+      } else if (type === "document") {
         query.mimeType = { $regex: /^(application|text)\// };
       }
     }
@@ -126,7 +151,7 @@ exports.getAssets = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('uploadedBy', 'name email');
+      .populate("uploadedBy", "name email");
 
     const total = await Asset.countDocuments(query);
     const totalPages = Math.ceil(total / limit);
@@ -137,53 +162,56 @@ exports.getAssets = async (req, res) => {
         assets,
         pagination: {
           current: page,
+          pages: totalPages,
           total: totalPages,
           count: assets.length,
-          totalRecords: total
-        }
-      }
+          totalRecords: total,
+        },
+      },
     });
-
   } catch (error) {
-    console.error('Get assets error:', error);
+    console.error("Get assets error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching assets'
+      message: "Error fetching assets",
     });
   }
 };
-
 // Get asset by ID
 exports.getAsset = async (req, res) => {
   try {
-    const asset = await Asset.findById(req.params.id)
-      .populate('uploadedBy', 'name email');
+    const asset = await Asset.findById(req.params.id).populate(
+      "uploadedBy",
+      "name email"
+    );
 
     if (!asset) {
       return res.status(404).json({
         success: false,
-        message: 'Asset not found'
+        message: "Asset not found",
       });
     }
 
     // Check ownership
-    if (asset.uploadedBy._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (
+      asset.uploadedBy._id.toString() !== req.user._id.toString() &&
+      req.user.role !== "admin"
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to access this asset'
+        message: "Not authorized to access this asset",
       });
     }
 
     res.status(200).json({
       success: true,
-      data: asset
+      data: asset,
     });
-
   } catch (error) {
-    console.error('Get asset error:', error);
+    console.error("Get asset error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching asset'
+      message: "Error fetching asset",
     });
   }
 };
@@ -196,15 +224,18 @@ exports.downloadAsset = async (req, res) => {
     if (!asset) {
       return res.status(404).json({
         success: false,
-        message: 'Asset not found'
+        message: "Asset not found",
       });
     }
 
     // Check ownership
-    if (asset.uploadedBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (
+      asset.uploadedBy.toString() !== req.user._id.toString() &&
+      req.user.role !== "admin"
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to access this asset'
+        message: "Not authorized to access this asset",
       });
     }
 
@@ -218,16 +249,18 @@ exports.downloadAsset = async (req, res) => {
       asset.storageKey
     );
 
-    res.setHeader('Content-Type', asset.mimeType);
-    res.setHeader('Content-Disposition', `attachment; filename="${asset.originalName}"`);
+    res.setHeader("Content-Type", asset.mimeType);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${asset.originalName}"`
+    );
 
     fileStream.pipe(res);
-
   } catch (error) {
-    console.error('Download error:', error);
+    console.error("Download error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error downloading file'
+      message: "Error downloading file",
     });
   }
 };
@@ -240,15 +273,18 @@ exports.getPreviewUrl = async (req, res) => {
     if (!asset) {
       return res.status(404).json({
         success: false,
-        message: 'Asset not found'
+        message: "Asset not found",
       });
     }
 
     // Check ownership
-    if (asset.uploadedBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (
+      asset.uploadedBy.toString() !== req.user._id.toString() &&
+      req.user.role !== "admin"
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to access this asset'
+        message: "Not authorized to access this asset",
       });
     }
 
@@ -261,14 +297,13 @@ exports.getPreviewUrl = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: { previewUrl }
+      data: { previewUrl },
     });
-
   } catch (error) {
-    console.error('Preview URL error:', error);
+    console.error("Preview URL error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error generating preview URL'
+      message: "Error generating preview URL",
     });
   }
 };
@@ -277,21 +312,24 @@ exports.getPreviewUrl = async (req, res) => {
 exports.updateAsset = async (req, res) => {
   try {
     const { tags, category } = req.body;
-    
+
     const asset = await Asset.findById(req.params.id);
 
     if (!asset) {
       return res.status(404).json({
         success: false,
-        message: 'Asset not found'
+        message: "Asset not found",
       });
     }
 
     // Check ownership
-    if (asset.uploadedBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (
+      asset.uploadedBy.toString() !== req.user._id.toString() &&
+      req.user.role !== "admin"
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to update this asset'
+        message: "Not authorized to update this asset",
       });
     }
 
@@ -303,18 +341,17 @@ exports.updateAsset = async (req, res) => {
       req.params.id,
       updateData,
       { new: true, runValidators: true }
-    ).populate('uploadedBy', 'name email');
+    ).populate("uploadedBy", "name email");
 
     res.status(200).json({
       success: true,
-      data: updatedAsset
+      data: updatedAsset,
     });
-
   } catch (error) {
-    console.error('Update asset error:', error);
+    console.error("Update asset error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error updating asset'
+      message: "Error updating asset",
     });
   }
 };
@@ -327,23 +364,29 @@ exports.deleteAsset = async (req, res) => {
     if (!asset) {
       return res.status(404).json({
         success: false,
-        message: 'Asset not found'
+        message: "Asset not found",
       });
     }
 
     // Check ownership
-    if (asset.uploadedBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (
+      asset.uploadedBy.toString() !== req.user._id.toString() &&
+      req.user.role !== "admin"
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to delete this asset'
+        message: "Not authorized to delete this asset",
       });
     }
 
     // Delete from MinIO
     await minioClient.removeObject(process.env.MINIO_BUCKET, asset.storageKey);
-    
+
     if (asset.thumbnailKey) {
-      await minioClient.removeObject(process.env.MINIO_BUCKET, asset.thumbnailKey);
+      await minioClient.removeObject(
+        process.env.MINIO_BUCKET,
+        asset.thumbnailKey
+      );
     }
 
     // Delete resolution files
@@ -356,14 +399,13 @@ exports.deleteAsset = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Asset deleted successfully'
+      message: "Asset deleted successfully",
     });
-
   } catch (error) {
-    console.error('Delete asset error:', error);
+    console.error("Delete asset error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error deleting asset'
+      message: "Error deleting asset",
     });
   }
 };
@@ -371,35 +413,39 @@ exports.deleteAsset = async (req, res) => {
 // Get dashboard stats
 exports.getDashboardStats = async (req, res) => {
   try {
-    const totalAssets = await Asset.countDocuments({ uploadedBy: req.user._id });
+    const totalAssets = await Asset.countDocuments({
+      uploadedBy: req.user._id,
+    });
     const totalSize = await Asset.aggregate([
       { $match: { uploadedBy: req.user._id } },
-      { $group: { _id: null, totalSize: { $sum: '$size' } } }
+      { $group: { _id: null, totalSize: { $sum: "$size" } } },
     ]);
-    
+
     const recentAssets = await Asset.find({ uploadedBy: req.user._id })
       .sort({ createdAt: -1 })
       .limit(5)
-      .select('originalName mimeType size createdAt');
+      .select("originalName mimeType size createdAt");
 
     const assetsByType = await Asset.aggregate([
       { $match: { uploadedBy: req.user._id } },
-      { 
-        $group: { 
-          _id: { 
+      {
+        $group: {
+          _id: {
             $cond: [
-              { $regexMatch: { input: '$mimeType', regex: /^image\// } },
-              'image',
-              { $cond: [
-                { $regexMatch: { input: '$mimeType', regex: /^video\// } },
-                'video',
-                'document'
-              ]}
-            ]
+              { $regexMatch: { input: "$mimeType", regex: /^image\// } },
+              "image",
+              {
+                $cond: [
+                  { $regexMatch: { input: "$mimeType", regex: /^video\// } },
+                  "video",
+                  "document",
+                ],
+              },
+            ],
           },
-          count: { $sum: 1 }
-        }
-      }
+          count: { $sum: 1 },
+        },
+      },
     ]);
 
     res.status(200).json({
@@ -408,15 +454,14 @@ exports.getDashboardStats = async (req, res) => {
         totalAssets,
         totalSize: totalAssets > 0 ? totalSize[0].totalSize : 0,
         recentAssets,
-        assetsByType
-      }
+        assetsByType,
+      },
     });
-
   } catch (error) {
-    console.error('Dashboard stats error:', error);
+    console.error("Dashboard stats error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching dashboard stats'
+      message: "Error fetching dashboard stats",
     });
   }
 };

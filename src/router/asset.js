@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require("express");
 const {
   uploadAsset,
   getAssets,
@@ -7,10 +7,13 @@ const {
   getPreviewUrl,
   updateAsset,
   deleteAsset,
-  getDashboardStats
-} = require('../controller/assets/assetController');
-const { protect, authorize } = require('../middleware/auth');
-const { upload, handleUploadErrors } = require('../middleware/upload');
+  getDashboardStats,
+} = require("../controller/assets/assetController");
+const { protect, authorize } = require("../middleware/auth");
+const {
+  upload,
+  handleUploadErrors,
+} = require("../middleware/upload");
 
 const router = express.Router();
 
@@ -19,34 +22,34 @@ router.use(protect);
 
 // Upload asset
 router.post(
-  '/upload',
-  upload.array('assets', parseInt(process.env.UPLOAD_LIMIT) || 5),
-  handleUploadErrors,
-  uploadAsset
+  "/upload",
+  upload.array("files", 10), // 2. Multer processes file
+  handleUploadErrors, // 4. Handle any multer errors
+  uploadAsset // 5. Your controller
 );
 
 // Get all assets with filtering and pagination
-router.get('/', getAssets);
+router.get("/", getAssets);
 
 // Get dashboard stats
-router.get('/dashboard/stats', getDashboardStats);
+router.get("/dashboard/stats", getDashboardStats);
 
 // Get single asset
-router.get('/:id', getAsset);
+router.get("/:id", getAsset);
 
 // Download asset
-router.get('/:id/download', downloadAsset);
+router.get("/:id/download", downloadAsset);
 
 // Get preview URL
-router.get('/:id/preview', getPreviewUrl);
+router.get("/:id/preview", getPreviewUrl);
 
 // Update asset
-router.put('/:id', updateAsset);
+router.put("/:id", updateAsset);
 
 // Delete asset
-router.delete('/:id', deleteAsset);
+router.delete("/:id", deleteAsset);
 
 // Admin only routes
-router.get('/admin/all', authorize('admin'), getAssets);
+router.get("/admin/all", authorize("admin"), getAssets);
 
 module.exports = router;
