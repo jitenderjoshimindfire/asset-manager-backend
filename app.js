@@ -5,6 +5,7 @@ const dotenv = require("dotenv");
 const cookieParser = require("cookie-parser");
 const authRouter = require("./src/router/auth");
 const assetRouter = require("./src/router/asset");
+const adminRouter = require("./src/router/admin");
 const { ensureBucketExists } = require("./src/config/aws/minio");
 
 dotenv.config();
@@ -49,5 +50,6 @@ app.use(cookieParser()); // parse cookies from incoming HTTP req
 
 app.use("/auth", authRouter); //auth endpoints
 app.use("/assets", assetRouter);
+app.use("/admin", adminRouter);
 
 module.exports = app;
